@@ -19,7 +19,7 @@ image_size = 64  # 64 x 64
 c_dim = 3  # for rgb
 
 t_dim = 128  # text feature dimension
-rnn_hidden_size = t_dim
+rnn_hidden_size = 300
 vocab_size = 8000
 word_embedding_size = 256
 keep_prob = 1.0
@@ -85,6 +85,135 @@ def cnn_encoder(inputs, reuse=False, name='cnnftxt'):
         return net_h4
 
 
+def residualblcok(input, w_init, gamma_init):
+    net_input = input
+    net_h0 = tf.layers.conv2d(inputs=net_input,
+                              filters=512,
+                              kernel_size=3,
+                              padding='same',
+                              use_bias=False,
+                              kernel_initializer=w_init)
+    net_h0 = tf.layers.batch_normalization(net_h0, gamma_initializer=gamma_init, training=True)
+    net_h0 = tf.nn.relu(net_h0)
+
+    net_h1 = tf.layers.conv2d(inputs=net_h0,
+                              filters=512,
+                              kernel_size=3,
+                              padding='same',
+                              use_bias=False,
+                              kernel_initializer=w_init)
+    net_h1 = tf.layers.batch_normalization(net_h1, gamma_initializer=gamma_init, training=True)
+    net_h2 = tf.nn.relu(input + net_h1)
+    return net_h2
+
+
+def generator_imgtxt2img(input_img, input_rnn_emned, reuse=False):
+    s = image_size
+    s2, s4 = int(s / 2), int(s / 4)
+
+    w_init = tf.random_normal_initializer(stddev=0.02)
+    gamma_init = tf.random_normal_initializer(1., 0.02)
+    gf_dim = 128
+
+    with tf.variable_scope("generator", reuse=reuse):
+        net_in = input_img
+        ##encoder
+        net_h0 = tf.layers.conv2d(net_in, gf_dim, (3, 3), (1, 1), padding='same', kernel_initializer=w_init,
+                                  activation=tf.nn.relu)
+
+        net_h1 = tf.layers.conv2d(net_h0, gf_dim * 2, (4, 4), (2, 2), padding='same', kernel_initializer=w_init)
+        net_h1 = tf.layers.batch_normalization(net_h1, gamma_initializer=gamma_init, training=True)
+        net_h1 = tf.nn.relu(net_h1)
+
+        net_h2 = tf.layers.conv2d(net_h1, gf_dim * 4, (4, 4), (2, 2), padding='same', kernel_initializer=w_init)
+        net_h2 = tf.layers.batch_normalization(net_h2, gamma_initializer=gamma_init, training=True)
+        net_h2 = tf.nn.relu(net_h2)
+
+        # ca+concat
+        net_txt = input_rnn_emned
+        net_txt = tf.layers.dense(net_txt, units=128, activation=tf.nn.leaky_relu, kernel_initializer=w_init,
+                                  use_bias=False)
+        net_txt = tf.expand_dims(net_txt, 1)
+        net_txt = tf.expand_dims(net_txt, 1)
+        net_txt = tf.tile(net_txt, [1, 16, 16, 1])
+
+        net_h2_concat = tf.concat([net_txt, net_h2], 3)
+        fusion = tf.layers.conv2d(net_h2_concat, gf_dim * 4, (3, 3), (1, 1), padding='same', kernel_initializer=w_init,
+                                  use_bias=False)
+        fusion = tf.layers.batch_normalization(fusion, gamma_initializer=gamma_init, training=True)
+        fusion = residualblcok(fusion, w_init, gamma_init)
+        fusion = residualblcok(fusion, w_init, gamma_init)
+        fusion = residualblcok(fusion, w_init, gamma_init)
+        fusion = residualblcok(fusion, w_init, gamma_init)
+
+        # decoder
+        net_input = fusion
+        net_h0 = tf.layers.conv2d_transpose(net_input, gf_dim * 2, (4, 4), (2, 2), padding='same',
+                                            kernel_initializer=w_init, use_bias=False)
+        net_h0 = tf.layers.batch_normalization(net_h0, gamma_initializer=gamma_init, training=True)
+        net_h0 = tf.nn.relu(net_h0)
+
+        net_h1 = tf.layers.conv2d_transpose(net_h0, gf_dim, (4, 4), (2, 2), padding='same', kernel_initializer=w_init,
+                                            use_bias=False)
+        net_h1 = tf.layers.batch_normalization(net_h1, gamma_initializer=gamma_init, training=True)
+        net_h1 = tf.nn.relu(net_h1)
+
+        net_h2 = tf.layers.conv2d_transpose(net_h1, c_dim, (4, 4), (2, 2), padding='same', kernel_initializer=w_init)
+        logits = net_h2
+        net_h2 = tf.nn.tanh(net_h2)
+        output = net_h2
+
+        return output, logits
+
+
+def discriminator_imgtxt2img(input_images, input_rnn_embed, reuse=False):
+    w_init = tf.random_normal_initializer(stddev=0.02)
+    b_init = None  # tf.constant_initializer(value=0.0)
+    gamma_init = tf.random_normal_initializer(1., 0.02)
+    df_dim = 64
+
+    with tf.variable_scope("discriminator", reuse=reuse):
+        net_in = input_images
+        net_h0 = tf.layers.conv2d(net_in, df_dim, (4, 4), (2, 2), padding='same', kernel_initializer=w_init,
+                                  activation=tf.nn.leaky_relu)
+
+        net_h1 = tf.layers.conv2d(net_h0, df_dim * 2, (4, 4), (2, 2), padding='same', kernel_initializer=w_init,
+                                  use_bias=False)
+        net_h1 = tf.layers.batch_normalization(net_h1, gamma_initializer=gamma_init, training=True)
+        net_h1 = tf.nn.leaky_relu(net_h1)
+
+        net_h2 = tf.layers.conv2d(net_h1, df_dim * 4, (4, 4), (2, 2), padding='same', kernel_initializer=w_init,
+                                  use_bias=False)
+        net_h2 = tf.layers.batch_normalization(net_h2, gamma_initializer=gamma_init, training=True)
+        net_h2 = tf.nn.leaky_relu(net_h2)
+
+        net_h3 = tf.layers.conv2d(net_h2, df_dim * 8, (4, 4), (2, 2), padding='same', kernel_initializer=w_init,
+                                  use_bias=False)
+
+        net_h3 = tf.layers.batch_normalization(net_h3, gamma_initializer=gamma_init, training=True)
+
+        net_txt = input_rnn_embed
+        net_txt = tf.layers.dense(net_txt, units=t_dim, activation=tf.nn.leaky_relu, kernel_initializer=w_init,
+                                  use_bias=False)
+        net_txt = tf.expand_dims(net_txt, 1)
+        net_txt = tf.expand_dims(net_txt, 1)
+        net_txt = tf.tile(net_txt, [1, 4, 4, 1])
+
+        net_h3_concat = tf.concat([net_txt, net_h3], 3)
+
+        net_h3 = tf.layers.conv2d(net_h3_concat, df_dim * 8, (1, 1), (1, 1), padding='same', kernel_initializer=w_init,
+                                  use_bias=False)
+        net_h3 = tf.layers.batch_normalization(net_h3, gamma_initializer=gamma_init, training=True)
+        net_h3 = tf.nn.leaky_relu(net_h3)
+
+        net_h4 = tf.layers.flatten(net_h3)
+        net_h4 = tf.layers.dense(net_h4, units=1, activation=tf.identity, kernel_initializer=w_init)
+
+        logits = net_h4
+        net_h4 = tf.nn.sigmoid(net_h4)
+    return net_h4, logits
+
+
 ## simple g1, d1 ===============================================================
 def generator_txt2img_simple(input_z, input_rnn_embed, reuse=False):
     """ z + (txt) --> 64x64 """
@@ -140,34 +269,40 @@ def discriminator_txt2img_simple(input_images, input_rnn_embed=None, is_train=Tr
 
     with tf.variable_scope("discriminator", reuse=reuse):
         net_in = input_images
-        net_h0 = tf.layers.conv2d(net_in, df_dim,(4,4),(2,2),padding='same',kernel_initializer=w_init,activation=tf.nn.leaky_relu)
+        net_h0 = tf.layers.conv2d(net_in, df_dim, (4, 4), (2, 2), padding='same', kernel_initializer=w_init,
+                                  activation=tf.nn.leaky_relu)
 
-        net_h1 = tf.layers.conv2d(net_h0, df_dim*2,(4,4),(2,2),padding='same',kernel_initializer=w_init,use_bias=False)
-        net_h1 = tf.layers.batch_normalization(net_h1,gamma_initializer=gamma_init,training=True)
+        net_h1 = tf.layers.conv2d(net_h0, df_dim * 2, (4, 4), (2, 2), padding='same', kernel_initializer=w_init,
+                                  use_bias=False)
+        net_h1 = tf.layers.batch_normalization(net_h1, gamma_initializer=gamma_init, training=True)
         net_h1 = tf.nn.leaky_relu(net_h1)
 
-        net_h2 = tf.layers.conv2d(net_h1, df_dim*4, (4,4),(2,2),padding='same',kernel_initializer=w_init,use_bias=False)
-        net_h2 = tf.layers.batch_normalization(net_h2, gamma_initializer=gamma_init,training=True)
+        net_h2 = tf.layers.conv2d(net_h1, df_dim * 4, (4, 4), (2, 2), padding='same', kernel_initializer=w_init,
+                                  use_bias=False)
+        net_h2 = tf.layers.batch_normalization(net_h2, gamma_initializer=gamma_init, training=True)
         net_h2 = tf.nn.leaky_relu(net_h2)
 
-        net_h3 = tf.layers.conv2d(net_h2,df_dim*8,(4,4),(2,2),padding='same',kernel_initializer=w_init,use_bias=False)
+        net_h3 = tf.layers.conv2d(net_h2, df_dim * 8, (4, 4), (2, 2), padding='same', kernel_initializer=w_init,
+                                  use_bias=False)
 
-        net_h3 = tf.layers.batch_normalization(net_h3, gamma_initializer=gamma_init,training=True)
+        net_h3 = tf.layers.batch_normalization(net_h3, gamma_initializer=gamma_init, training=True)
 
         net_txt = input_rnn_embed
-        net_txt = tf.layers.dense(net_txt, units=t_dim,activation=tf.nn.leaky_relu,kernel_initializer=w_init,use_bias=False)
-        net_txt = tf.expand_dims(net_txt,1)
-        net_txt = tf.expand_dims(net_txt,1)
-        net_txt = tf.tile(net_txt, [1,4,4,1])
+        net_txt = tf.layers.dense(net_txt, units=t_dim, activation=tf.nn.leaky_relu, kernel_initializer=w_init,
+                                  use_bias=False)
+        net_txt = tf.expand_dims(net_txt, 1)
+        net_txt = tf.expand_dims(net_txt, 1)
+        net_txt = tf.tile(net_txt, [1, 4, 4, 1])
 
-        net_h3_concat = tf.concat([net_txt,net_h3],3)
+        net_h3_concat = tf.concat([net_txt, net_h3], 3)
 
-        net_h3 = tf.layers.conv2d(net_h3_concat,df_dim*8,(1,1),(1,1),padding='same',kernel_initializer=w_init,use_bias=False)
-        net_h3 = tf.layers.batch_normalization(net_h3,gamma_initializer=gamma_init,training=True)
+        net_h3 = tf.layers.conv2d(net_h3_concat, df_dim * 8, (1, 1), (1, 1), padding='same', kernel_initializer=w_init,
+                                  use_bias=False)
+        net_h3 = tf.layers.batch_normalization(net_h3, gamma_initializer=gamma_init, training=True)
         net_h3 = tf.nn.leaky_relu(net_h3)
 
         net_h4 = tf.layers.flatten(net_h3)
-        net_h4 = tf.layers.dense(net_h4, units=1,activation=tf.identity,kernel_initializer=w_init)
+        net_h4 = tf.layers.dense(net_h4, units=1, activation=tf.identity, kernel_initializer=w_init)
 
         logits = net_h4
         net_h4 = tf.nn.sigmoid(net_h4)

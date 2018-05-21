@@ -53,6 +53,7 @@ def main_train():
     t_wrong_image = tf.placeholder('float32', [batch_size ,image_size, image_size, 3], name = 'wrong_image')
     t_real_caption = tf.placeholder(dtype=tf.int64, shape=[batch_size, None], name='real_caption_input')
     t_wrong_caption = tf.placeholder(dtype=tf.int64, shape=[batch_size, None], name='wrong_caption_input')
+    t_rel_caption = tf.placeholder(dtype=tf.int64,shape=[batch_size,None], name='related_caption_input')
     t_z = tf.placeholder(tf.float32, [batch_size, z_dim], name='z_noise')
 
     ## training inference for text-to-image mapping
@@ -67,34 +68,34 @@ def main_train():
                 tf.reduce_mean(tf.maximum(0., alpha - cosine_similarity(x, v) + cosine_similarity(x_w, v)))
 
     ## training inference for txt2img
-    generator_txt2img = model.generator_txt2img_simple
-    discriminator_txt2img = model.discriminator_txt2img_simple
+    generator_txt2img = model.generator_imgtxt2img
+    discriminator_txt2img = model.discriminator_imgtxt2img
 
-    net_rnn = rnn_embed(t_real_caption, is_train=False, reuse=True)
-    net_fake_image, _ = generator_txt2img(t_z,
+    net_rnn = rnn_embed(t_rel_caption, is_train=False, reuse=True)
+    net_fake_image, _ = generator_txt2img(t_real_image,
                     net_rnn.outputs,
                     reuse=False)
                     #+ tf.random_normal(shape=net_rnn.outputs.get_shape(), mean=0, stddev=0.02), # NOISE ON RNN
     net_d, disc_fake_image_logits = discriminator_txt2img(
-                    net_fake_image, net_rnn.outputs, is_train=True, reuse=False)
+                    net_fake_image, net_rnn.outputs, reuse=False)
     _, disc_real_image_logits = discriminator_txt2img(
-                    t_real_image, net_rnn.outputs, is_train=True, reuse=True)
+                    t_real_image, net_rnn.outputs, reuse=True)
     _, disc_mismatch_logits = discriminator_txt2img(
                     # t_wrong_image,
                     t_real_image,
                     # net_rnn.outputs,
                     rnn_embed(t_wrong_caption, is_train=False, reuse=True).outputs,
-                    is_train=True, reuse=True)
+                    reuse=True)
 
     ## testing inference for txt2img
-    net_g, _ = generator_txt2img(t_z,
-                    rnn_embed(t_real_caption, is_train=False, reuse=True).outputs,
-                    reuse=True, )
+    net_g, _ = generator_txt2img(t_real_image,
+                    rnn_embed(t_rel_caption, is_train=False, reuse=True).outputs,
+                    reuse=True)
 
     d_loss1 = tl.cost.sigmoid_cross_entropy(disc_real_image_logits, tf.ones_like(disc_real_image_logits), name='d1')
     d_loss2 = tl.cost.sigmoid_cross_entropy(disc_mismatch_logits,  tf.zeros_like(disc_mismatch_logits), name='d2')
     d_loss3 = tl.cost.sigmoid_cross_entropy(disc_fake_image_logits, tf.zeros_like(disc_fake_image_logits), name='d3')
-    d_loss = d_loss1 + (d_loss2 + d_loss3) * 0.5
+    d_loss = d_loss1 + d_loss2 + d_loss3
     g_loss = tl.cost.sigmoid_cross_entropy(disc_fake_image_logits, tf.ones_like(disc_fake_image_logits), name='g')
 
     ####======================== DEFINE TRAIN OPTS ==============================###
@@ -155,6 +156,22 @@ def main_train():
         # sample_sentence[i] = [vocab.word_to_id(word) for word in sentence]
         # print(sample_sentence[i])
     sample_sentence = tl.prepro.pad_sequences(sample_sentence, padding='post')
+    ### get image test
+    tmp = get_random_int(min=0,max=n_captions_test-1,number=64)
+    idex4 = get_random_int(min=0, max=n_images_test - 1, number=8)
+    b_test_image = images_test[idex4]
+    imagetest = images_test[np.floor(np.asarray(tmp).astype('float') / n_captions_per_image).astype('int')]
+    save_images(b_test_image, [1, 8], 'samples/ori.png')
+    for i in [0,8,16,24,32,40,48,56]:
+        imagetest[i] = b_test_image[0]
+        imagetest[i + 1] = b_test_image[1]
+        imagetest[i + 2] = b_test_image[2]
+        imagetest[i + 3] = b_test_image[3]
+        imagetest[i + 4] = b_test_image[4]
+        imagetest[i + 5] = b_test_image[5]
+        imagetest[i + 6] = b_test_image[6]
+        imagetest[i + 7] = b_test_image[7]
+    save_images(imagetest,[8,8],'samples/ori2.png')
 
     n_epoch = 300
     print_freq = 1
@@ -189,6 +206,11 @@ def main_train():
             ## get wrong image
             idexs2 = get_random_int(min=0, max=n_images_train-1, number=batch_size)
             b_wrong_images = images_train[idexs2]
+            ## get related caption
+            idexs3 = get_random_int(min=0, max = n_captions_train-1, number=batch_size)
+            b_rel_caption = captions_ids_train[idexs3]
+            b_rel_caption = tl.prepro.pad_sequences(b_rel_caption, padding='post')
+
             ## get noise
             b_z = np.random.normal(loc=0.0, scale=1.0, size=(sample_size, z_dim)).astype(np.float32)
                 # b_z = np.random.uniform(low=-1, high=1, size=[batch_size, z_dim]).astype(np.float32)
@@ -211,11 +233,11 @@ def main_train():
                             # t_wrong_image : b_wrong_images,
                             t_wrong_caption : b_wrong_caption,
                             t_real_caption : b_real_caption,
-                            t_z : b_z})
+                            t_rel_caption : b_rel_caption})
             ## updates G
             errG, _ = sess.run([g_loss, g_optim], feed_dict={
-                            t_real_caption : b_real_caption,
-                            t_z : b_z})
+                            t_rel_caption : b_rel_caption,
+                            t_real_image : b_real_images})
 
             print("Epoch: [%2d/%2d] [%4d/%4d] time: %4.4fs, d_loss: %.8f, g_loss: %.8f, rnn_loss: %.8f" \
                         % (epoch, n_epoch, step, n_batch_epoch, time.time() - step_time, errD, errG, errRNN))
@@ -223,8 +245,8 @@ def main_train():
         if (epoch + 1) % print_freq == 0:
             print(" ** Epoch %d took %fs" % (epoch, time.time()-start_time))
             img_gen, rnn_out = sess.run([net_g, net_rnn.outputs], feed_dict={
-                                        t_real_caption : sample_sentence,
-                                        t_z : sample_seed})
+                                        t_rel_caption : sample_sentence,
+                                        t_real_image : imagetest})
 
             # img_gen = threading_data(img_gen, prepro_img, mode='rescale')
             save_images(img_gen, [ni, ni], 'samples/step1_gan-cls/train_{:02d}.png'.format(epoch))

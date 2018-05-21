@@ -19,7 +19,7 @@ image_size = 64  # 64 x 64
 c_dim = 3  # for rgb
 
 t_dim = 128  # text feature dimension
-rnn_hidden_size = 300
+rnn_hidden_size = t_dim
 vocab_size = 8000
 word_embedding_size = 256
 keep_prob = 1.0
@@ -45,7 +45,7 @@ def rnn_embed(input_seqs, is_train=True, reuse=False):
                                   cell_init_args={'state_is_tuple': True, 'reuse': reuse},
                                   # for TF1.1, TF1.2 dont need to set reuse
                                   n_hidden=rnn_hidden_size,
-                                  dropout=(keep_prob if is_train else None),
+                                  dropout=(keep_prob,keep_prob),
                                   initializer=w_init,
                                   sequence_length=tl.layers.retrieve_seq_length_op2(input_seqs),
                                   return_last=True,

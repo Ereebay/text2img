@@ -79,7 +79,7 @@ def main_train():
     net_d, disc_fake_image_logits = discriminator_txt2img(
                     net_fake_image, net_rnn.outputs, reuse=False)
     _, disc_real_image_logits = discriminator_txt2img(
-                    t_real_image, net_rnn.outputs, reuse=True)
+                    t_real_image, rnn_embed(t_real_caption,is_train=False, reuse=True).outputs, reuse=True)
     _, disc_mismatch_logits = discriminator_txt2img(
                     # t_wrong_image,
                     t_real_image,

@@ -72,7 +72,7 @@ def main_train():
     discriminator_txt2img = model.discriminator_imgtxt2img
 
     net_rnn = rnn_embed(t_rel_caption, is_train=False, reuse=True)
-    net_fake_image, _ = generator_txt2img(t_real_image,
+    net_fake_image, _, cond_mu_o, cond_sigma_o, multNormal2, multNormal1 = generator_txt2img(t_real_image,
                     net_rnn.outputs,
                     reuse=False)
                     #+ tf.random_normal(shape=net_rnn.outputs.get_shape(), mean=0, stddev=0.02), # NOISE ON RNN
@@ -88,15 +88,17 @@ def main_train():
                     reuse=True)
 
     ## testing inference for txt2img
-    net_g, _ = generator_txt2img(t_real_image,
+    net_g, _,cond_mu_o, cond_sigma_o, multNormal2, multNormal1= generator_txt2img(t_real_image,
                     rnn_embed(t_rel_caption, is_train=False, reuse=True).outputs,
                     reuse=True)
-
+    kl = tf.distributions.kl_divergence(multNormal2,multNormal1) * 1
+    klloss = -cond_sigma_o + 0.5 * (-1 + tf.exp(2.0 * cond_sigma_o) + tf.square(cond_mu_o))
+    klloss = tf.reduce_mean(klloss)
     d_loss1 = tl.cost.sigmoid_cross_entropy(disc_real_image_logits, tf.ones_like(disc_real_image_logits), name='d1')
     d_loss2 = tl.cost.sigmoid_cross_entropy(disc_mismatch_logits,  tf.zeros_like(disc_mismatch_logits), name='d2')
     d_loss3 = tl.cost.sigmoid_cross_entropy(disc_fake_image_logits, tf.zeros_like(disc_fake_image_logits), name='d3')
     d_loss = d_loss1 + d_loss2 + d_loss3
-    g_loss = tl.cost.sigmoid_cross_entropy(disc_fake_image_logits, tf.ones_like(disc_fake_image_logits), name='g')
+    g_loss = tl.cost.sigmoid_cross_entropy(disc_fake_image_logits, tf.ones_like(disc_fake_image_logits), name='g') + klloss
 
     ####======================== DEFINE TRAIN OPTS ==============================###
     lr = 0.0002
@@ -139,16 +141,22 @@ def main_train():
     sample_size = batch_size
     sample_seed = np.random.normal(loc=0.0, scale=1.0, size=(sample_size, z_dim)).astype(np.float32)
         # sample_seed = np.random.uniform(low=-1, high=1, size=(sample_size, z_dim)).astype(np.float32)
-    sample_sentence = ["the flower shown has yellow anther red pistil and bright red petals."] * int(sample_size/ni) + \
-                      ["this flower has petals that are yellow, white and purple and has dark lines"] * int(sample_size/ni) + \
-                      ["the petals on this flower are white with a yellow center"] * int(sample_size/ni) + \
-                      ["this flower has a lot of small round pink petals."] * int(sample_size/ni) + \
-                      ["this flower is orange in color, and has petals that are ruffled and rounded."] * int(sample_size/ni) + \
-                      ["the flower has yellow petals and the center of it is brown."] * int(sample_size/ni) + \
-                      ["this flower has petals that are blue and white."] * int(sample_size/ni) +\
-                      ["these white flowers have petals that start off white in color and end in a white towards the tips."] * int(sample_size/ni)
-
-    # sample_sentence = captions_ids_test[0:sample_size]
+    # sample_sentence = ["the flower shown has yellow anther red pistil and bright red petals."] * int(sample_size/ni) + \
+    #                   ["this flower has petals that are yellow, white and purple and has dark lines"] * int(sample_size/ni) + \
+    #                   ["the petals on this flower are white with a yellow center"] * int(sample_size/ni) + \
+    #                   ["this flower has a lot of small round pink petals."] * int(sample_size/ni) + \
+    #                   ["this flower is orange in color, and has petals that are ruffled and rounded."] * int(sample_size/ni) + \
+    #                   ["the flower has yellow petals and the center of it is brown."] * int(sample_size/ni) + \
+    #                   ["this flower has petals that are blue and white."] * int(sample_size/ni) +\
+    #                   ["these white flowers have petals that start off white in color and end in a white towards the tips."] * int(sample_size/ni)
+    sample_sentence = ["This small bird has a blue crown and white belly."] * int(sample_size/ni) + \
+                      ["This small yellow bird has grey wings, and a black bill."] * int(sample_size/ni) + \
+                      ["This particular bird with a red head and breast and features grey wings."] * int(sample_size/ni) + \
+                      ["This black bird has no other colors with a short bill."] * int(sample_size/ni) + \
+                      ["An orange bird with green wings and blue head."] * int(sample_size/ni) + \
+                      ["A black bird with a red head."] * int(sample_size/ni) + \
+                      ["A red body bird with black wings and a gray beak."] * int(sample_size/ni) +\
+                      ["A small brown bird with a brown crown has a white belly."] * int(sample_size/ni)
     for i, sentence in enumerate(sample_sentence):
         print("seed: %s" % sentence)
         sentence = preprocess_caption(sentence)
@@ -173,7 +181,7 @@ def main_train():
         imagetest[i + 7] = b_test_image[7]
     save_images(imagetest,[8,8],'samples/ori2.png')
 
-    n_epoch = 300
+    n_epoch = 600
     print_freq = 1
     n_batch_epoch = int(n_images_train / batch_size)
     # exit()

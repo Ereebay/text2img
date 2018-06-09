@@ -3,7 +3,9 @@
 import tensorflow as tf
 import tensorlayer as tl
 from tensorlayer.layers import *
+from ops import *
 import os
+ds = tf.contrib.distributions
 
 """Adversarially Learned Inference
 Page 14: CelebA model hyperparameters
@@ -19,7 +21,7 @@ image_size = 64  # 64 x 64
 c_dim = 3  # for rgb
 
 t_dim = 128  # text feature dimension
-rnn_hidden_size = t_dim
+rnn_hidden_size = 300
 vocab_size = 8000
 word_embedding_size = 256
 keep_prob = 1.0
@@ -80,10 +82,23 @@ def cnn_encoder(inputs, reuse=False, name='cnnftxt'):
         net_h3 = tf.nn.leaky_relu(net_h3)
 
         net_h4 = tf.layers.flatten(net_h3)
-        net_h4 = tf.layers.dense(net_h4, units=t_dim, activation=tf.identity, kernel_initializer=w_init, use_bias=False)
+        net_h4 = tf.layers.dense(net_h4, units=300, activation=tf.identity, kernel_initializer=w_init, use_bias=False)
 
         return net_h4
 
+def conditionaugmentation(embed, reuse=False, name='condAugment'):
+    with tf.variable_scope(name, reuse=reuse):
+        cond_gen = linear(embed, 128 *2, scope='condAugmentGen')
+        cond_mu_o = cond_gen[:,128:]
+        cond_sigma_o = cond_gen[:,:128]
+
+        multNormal1 = ds.MultivariateNormalDiag(tf.zeros([128]), tf.ones([128]))
+        cond_epsilon = multNormal1.sample(batch_size) # batch x N_g
+        print('cond_epsilon : {}'.format(cond_epsilon))
+        cond_c_o = cond_mu_o + tf.multiply(cond_sigma_o, cond_epsilon)
+        multNormal2 = ds.MultivariateNormalDiag(cond_mu_o, cond_sigma_o)
+
+        return cond_c_o, cond_mu_o, cond_sigma_o, multNormal2, multNormal1
 
 def residualblcok(input, w_init, gamma_init):
     net_input = input
@@ -130,8 +145,8 @@ def generator_imgtxt2img(input_img, input_rnn_emned, reuse=False):
         net_h2 = tf.nn.relu(net_h2)
 
         # ca+concat
-        net_txt = input_rnn_emned
-        net_txt = tf.layers.dense(net_txt, units=128, activation=tf.nn.leaky_relu, kernel_initializer=w_init,
+        cond_c_o, cond_mu_o, cond_sigma_o, multNormal2, multNormal1 = conditionaugmentation(input_rnn_emned)
+        net_txt = tf.layers.dense(cond_c_o, units=128, activation=tf.nn.leaky_relu, kernel_initializer=w_init,
                                   use_bias=False)
         net_txt = tf.expand_dims(net_txt, 1)
         net_txt = tf.expand_dims(net_txt, 1)
@@ -158,12 +173,12 @@ def generator_imgtxt2img(input_img, input_rnn_emned, reuse=False):
         net_h1 = tf.layers.batch_normalization(net_h1, gamma_initializer=gamma_init, training=True)
         net_h1 = tf.nn.relu(net_h1)
 
-        net_h2 = tf.layers.conv2d_transpose(net_h1, c_dim, (4, 4), (2, 2), padding='same', kernel_initializer=w_init)
+        net_h2 = tf.layers.conv2d_transpose(net_h1, c_dim, (3, 3), (1, 1), padding='same', kernel_initializer=w_init)
         logits = net_h2
         net_h2 = tf.nn.tanh(net_h2)
         output = net_h2
 
-        return output, logits
+        return output, logits, cond_mu_o, cond_sigma_o, multNormal2, multNormal1
 
 
 def discriminator_imgtxt2img(input_images, input_rnn_embed, reuse=False):
